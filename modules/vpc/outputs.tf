@@ -1,9 +1,14 @@
 output "vpc_id" {
-  value       = aws_vpc.main.id
-  description = "VPC ID — passed to the EKS module"
+  value       = data.aws_vpc.default.id
+  description = "VPC ID passed to the EKS module"
 }
 
 output "subnet_ids" {
-  value       = [aws_subnet.az1.id, aws_subnet.az2.id, aws_subnet.az3.id]
-  description = "List of all subnet IDs — passed to the EKS cluster and node group"
+  value       = data.aws_subnets.default.ids
+  description = "Subnet IDs passed to the EKS cluster and node group"
+
+  depends_on = [
+    aws_ec2_tag.subnet_cluster,
+    aws_ec2_tag.subnet_elb,
+  ]
 }

@@ -1,6 +1,3 @@
-# Dev environment — smallest node sizing, single node.
-# Values are hardcoded as locals (not tfvars) so there is no variable file that
-# could accidentally be passed to the wrong environment's terraform apply.
 variable "prefix" {
   description = "Prefix for resource names"
   type        = string

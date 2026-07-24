@@ -1,0 +1,13 @@
+Command: kubectl cluster-info
+Date:    2026-07-24
+Cluster: borsboomh-eks-dev
+Region:  af-south-1
+
+Kubernetes control plane is running at https://89FACB21A2DF54BADE88E436D34696E3.yl4.af-south-1.eks.amazonaws.com
+CoreDNS is running at https://89FACB21A2DF54BADE88E436D34696E3.yl4.af-south-1.eks.amazonaws.com/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy
+
+---
+Command: kubectl version
+Client Version: v1.33.5
+Kustomize Version: v5.6.0
+Server Version: v1.32.13-eks-8f14419

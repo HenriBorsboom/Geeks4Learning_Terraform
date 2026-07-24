@@ -5,13 +5,10 @@ locals {
   node_group_name   = "${var.prefix}-eks-ng-${var.environment}"
 }
 
-# Used to grant the deploying identity cluster-admin access automatically.
 data "aws_caller_identity" "current" {}
 
 # ----- Control Plane IAM -----
 
-# The EKS control plane (the Kubernetes master) needs permission to call AWS
-# APIs on your behalf — e.g. to create ENIs, describe EC2 instances, etc.
 resource "aws_iam_role" "cluster" {
   name = local.cluster_role_name
 
@@ -48,7 +45,6 @@ resource "aws_eks_cluster" "main" {
   }
 
   # API mode uses EKS access entries instead of the legacy aws-auth ConfigMap.
-  # This is the modern, recommended authentication approach.
   access_config {
     authentication_mode = "API"
   }
@@ -66,7 +62,6 @@ resource "aws_eks_cluster" "main" {
 # ----- Access Entry -----
 
 # Grant the IAM identity that runs terraform apply cluster-admin rights.
-# Without this, you cannot run kubectl commands against the cluster after apply.
 resource "aws_eks_access_entry" "admin" {
   cluster_name  = aws_eks_cluster.main.name
   principal_arn = data.aws_caller_identity.current.arn
@@ -85,4 +80,63 @@ resource "aws_eks_access_policy_association" "admin" {
   }
 
   depends_on = [aws_eks_access_entry.admin]
+}
+
+# ----- Node IAM -----
+
+resource "aws_iam_role" "node" {
+  name = local.node_role_name
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "ec2.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "node_worker" {
+  role       = aws_iam_role.node.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+}
+
+resource "aws_iam_role_policy_attachment" "node_cni" {
+  role       = aws_iam_role.node.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+}
+
+resource "aws_iam_role_policy_attachment" "node_ecr" {
+  role       = aws_iam_role.node.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+}
+
+# ----- Node Group -----
+
+resource "aws_eks_node_group" "main" {
+  cluster_name    = aws_eks_cluster.main.name
+  node_group_name = local.node_group_name
+  node_role_arn   = aws_iam_role.node.arn
+  subnet_ids      = var.subnet_ids
+
+  instance_types = [var.node_instance_type]
+
+  scaling_config {
+    desired_size = var.node_desired_size
+    min_size     = var.node_min_size
+    max_size     = var.node_max_size
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.node_worker,
+    aws_iam_role_policy_attachment.node_cni,
+    aws_iam_role_policy_attachment.node_ecr,
+  ]
+
+  tags = {
+    Environment = var.environment
+  }
 }

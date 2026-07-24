@@ -1,0 +1,28 @@
+Command: terraform output
+Date:    2026-07-24
+Environment: dev
+Backend:     s3://borsboomh-tfstate/dev/terraform.tfstate
+
+eks_cluster_endpoint = "https://89FACB21A2DF54BADE88E436D34696E3.yl4.af-south-1.eks.amazonaws.com"
+eks_cluster_name     = "borsboomh-eks-dev"
+
+---
+Resources created (terraform apply summary):
+  10 added, 0 changed, 0 destroyed
+
+  module.vpc.aws_ec2_tag.subnet_cluster  (x3 subnets)   kubernetes.io/cluster/borsboomh-eks-dev = shared
+  module.vpc.aws_ec2_tag.subnet_elb      (x3 subnets)   kubernetes.io/role/elb = 1
+  module.eks.aws_iam_role.cluster                        eks-cluster-borsboomh-role-dev
+  module.eks.aws_iam_role.node                           eks-node-borsboomh-role-dev
+  module.eks.aws_iam_role_policy_attachment.cluster_policy
+  module.eks.aws_iam_role_policy_attachment.node_worker
+  module.eks.aws_iam_role_policy_attachment.node_cni
+  module.eks.aws_iam_role_policy_attachment.node_ecr
+  module.eks.aws_eks_cluster.main                        borsboomh-eks-dev  (Kubernetes 1.32)
+  module.eks.aws_eks_access_entry.admin
+  module.eks.aws_eks_access_policy_association.admin     AmazonEKSClusterAdminPolicy
+  module.eks.aws_eks_node_group.main                     borsboomh-eks-ng-dev  t3.small desired=1
+
+Note: VPC was not created — the shared training account reached the 5-VPC regional limit.
+      The default VPC (vpc-0e27ea3872d3b8c07, 172.31.0.0/16) was used instead.
+      See modules/vpc/main.tf for the full VPC resource definitions (commented).
