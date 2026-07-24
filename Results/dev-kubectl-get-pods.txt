@@ -1,0 +1,12 @@
+Command: kubectl get pods -A
+Date:    2026-07-24
+Cluster: borsboomh-eks-dev
+Region:  af-south-1
+
+NAMESPACE     NAME                       READY   STATUS    RESTARTS   AGE
+kube-system   aws-node-kjbk9             2/2     Running   0          2m3s
+kube-system   coredns-7b484d5559-58ztk   1/1     Running   0          3m35s
+kube-system   coredns-7b484d5559-67sv4   1/1     Running   0          3m35s
+kube-system   kube-proxy-5klkg           1/1     Running   0          2m3s
+
+Result: All 4 system pods Running (aws-node, 2x coredns, kube-proxy)
