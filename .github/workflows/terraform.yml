@@ -13,7 +13,7 @@ jobs:
     strategy:
       # Run all three environments in parallel; a failure in one does not cancel others.
       matrix:
-        environment: [dev, qa, prod]
+        environment: [dev, qa, prd]
 
     steps:
       - name: Checkout

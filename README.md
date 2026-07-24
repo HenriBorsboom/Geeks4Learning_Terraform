@@ -1,6 +1,6 @@
 # borsboomh-terraform
 
-Multi-environment EKS deployment on AWS using Terraform. Provisions a VPC and EKS cluster (control plane + managed node group) in three independent environments: dev, qa, and prod.
+Multi-environment EKS deployment on AWS using Terraform. Provisions a VPC and EKS cluster (control plane + access entry) across three environments: dev, qa, and prd.
 
 ---
 
@@ -8,17 +8,24 @@ Multi-environment EKS deployment on AWS using Terraform. Provisions a VPC and EK
 
 ```
 borsboomh-terraform/
-├── bootstrap/          # Run once to create the S3 bucket and DynamoDB lock table
+├── bootstrap/                   # Run once: creates the S3 remote state bucket
 ├── modules/
-│   ├── vpc/            # VPC, subnets, Internet Gateway, route tables
-│   └── eks/            # IAM roles, EKS cluster, access entry, node group
-└── environments/
-    ├── dev/            # Independent Terraform root module for dev
-    ├── qa/             # Independent Terraform root module for qa
-    └── prod/           # Independent Terraform root module for prod
+│   ├── vpc/                     # VPC and subnets across 3 AZs
+│   └── eks/                     # IAM roles, EKS control plane, access entry
+├── environments/
+│   ├── dev/                     # backend.tfvars + vars.tfvars for dev
+│   ├── qa/                      # backend.tfvars + vars.tfvars for qa
+│   └── prd/                     # backend.tfvars + vars.tfvars for prd
+├── main.tf                      # Root module — calls vpc and eks modules
+└── providers.tf                 # AWS provider + partial S3 backend config
 ```
 
-Each `environments/<env>/` directory is a self-contained Terraform root module. Running `terraform apply` inside `environments/dev/` targets only dev state and resources — it cannot affect qa or prod. The modules are written once and called three times with different inputs, avoiding code duplication while allowing per-environment configuration (instance sizes, node counts).
+The project uses a **single root module** at the repository root. The `environments/<env>/` directories are not separate Terraform root modules — they each contain two configuration files only:
+
+- `backend.tfvars` — environment-specific backend values (S3 bucket, key, region)
+- `vars.tfvars` — environment-specific variable values (instance type, node counts)
+
+Running `terraform init -backend-config=environments/dev/backend.tfvars` points Terraform at a separate state key in S3 for that environment. Passing `-var-file=environments/dev/vars.tfvars` at plan/apply time sets the environment-specific sizing. The separate state keys make it impossible for an apply in one environment to read or write another environment's state.
 
 ---
 
@@ -32,7 +39,7 @@ Each `environments/<env>/` directory is a self-contained Terraform root module. 
 
 ## Step 1 — Run Bootstrap (once only)
 
-The S3 bucket and DynamoDB table for remote state must exist before any environment can initialise. This is the classic Terraform bootstrapping problem: you cannot use remote state to store the infrastructure that provides your remote state.
+The S3 bucket for remote state must exist before any environment can initialise. This is the classic Terraform bootstrapping problem: remote state cannot store the infrastructure that provides remote state.
 
 The `bootstrap/` directory solves this with a local-state configuration that runs once:
 
@@ -43,36 +50,51 @@ terraform plan
 terraform apply
 ```
 
-Confirm the output shows `state_bucket_name = "borsboomh-tfstate"` and `lock_table_name = "borsboomh-tfstate-locks"`.
+Confirm the output shows `state_bucket_name = "borsboomh-tfstate"`.
 
-The `bootstrap/terraform.tfstate` file is created locally. Do not commit it and do not delete it — it is your only record of the bootstrap infrastructure.
+The `bootstrap/terraform.tfstate` file is created locally. Do not commit it and do not delete it — it is the only Terraform record of the bootstrap infrastructure.
 
 ---
 
 ## Step 2 — Deploy an Environment
 
-Run the following steps for each environment (dev first, then qa, then prod):
+All environments are deployed from the **repository root** (`borsboomh-terraform/`). Use the appropriate `backend.tfvars` and `vars.tfvars` for the target environment.
+
+### Deploy dev
 
 ```bash
-cd environments/dev
-terraform init
-terraform plan
-terraform apply
+# Run from borsboomh-terraform/
+terraform init -backend-config=environments/dev/backend.tfvars
+terraform plan -var-file=environments/dev/vars.tfvars
+terraform apply -var-file=environments/dev/vars.tfvars
 ```
 
-After a successful apply, update your kubeconfig and verify the cluster is reachable:
+### Deploy qa
+
+```bash
+terraform init -reconfigure -backend-config=environments/qa/backend.tfvars
+terraform plan -var-file=environments/qa/vars.tfvars
+terraform apply -var-file=environments/qa/vars.tfvars
+```
+
+### Deploy prd
+
+```bash
+terraform init -reconfigure -backend-config=environments/prd/backend.tfvars
+terraform plan -var-file=environments/prd/vars.tfvars
+terraform apply -var-file=environments/prd/vars.tfvars
+```
+
+> `-reconfigure` is required when switching the backend between environments on the same machine.
+
+After apply, update your kubeconfig and verify the cluster endpoint is reachable:
 
 ```bash
 aws eks update-kubeconfig --name borsboomh-eks-dev --region af-south-1
 kubectl get nodes
 ```
 
-Repeat for qa and prod:
-
-```bash
-cd ../qa  && terraform init && terraform plan && terraform apply
-cd ../prod && terraform init && terraform plan && terraform apply
-```
+> Note: the EKS module does not yet provision a worker node group (see Known Limitations). `kubectl get nodes` will return no resources at this stage.
 
 ---
 
@@ -82,33 +104,66 @@ All three environments share a single S3 bucket (`borsboomh-tfstate`) but store 
 
 | Environment | State key |
 |---|---|
-| dev  | `dev/terraform.tfstate`  |
-| qa   | `qa/terraform.tfstate`   |
-| prod | `prod/terraform.tfstate` |
+| dev | `dev/terraform.tfstate`  |
+| qa  | `qa/terraform.tfstate`   |
+| prd | `prod/terraform.tfstate` |
 
-State locking uses S3 native locking (`use_lockfile = true`). Terraform writes a `.tflock` object alongside each state file in the bucket. No DynamoDB table is required. Each environment's `backend.tf` specifies its own key, making it physically impossible for a `terraform apply` in one environment to read or write another environment's state file.
+State locking uses S3 native locking (`use_lockfile = true`). Terraform writes a `.tflock` object alongside each state file. No DynamoDB table is required. S3 bucket versioning and AES256 server-side encryption are enabled to protect state contents.
+
+---
+
+## Environment Configuration
+
+| Environment | Instance type | Desired nodes | Min | Max |
+|---|---|---|---|---|
+| dev | t3.small  | 1 | 1 | 2 |
+| qa  | t3.medium | 2 | 1 | 3 |
+| prd | t3.large  | 3 | 2 | 5 |
+
+---
+
+## GitHub Actions CI (Bonus)
+
+A CI workflow (`.github/workflows/terraform.yml`) runs `terraform init`, `terraform validate`, and `terraform plan` for all three environments in parallel on every push and pull request to `main`.
+
+The workflow requires two GitHub Actions secrets:
+
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+
+> Known issue: the CI matrix declares `prod` as the environment name but the directory is named `prd`. The `prod` job will fail with a missing directory error until the matrix value or the directory name is aligned.
 
 ---
 
 ## Design Decisions and Trade-offs
 
-**Public subnets:** Worker nodes use public subnets with `map_public_ip_on_launch = true`. This gives nodes direct outbound internet access to pull container images and reach the EKS API endpoint. In a production system you would use private subnets behind a NAT Gateway to avoid exposing node IPs — public subnets are acceptable for this training exercise.
+**Single root module with var-file environment overrides:** All three environments share one root module and one set of reusable modules. Switching environments requires reinitialising with a different `backend.tfvars` and passing a different `vars.tfvars`. This avoids code duplication at the cost of requiring `-reconfigure` when switching environments on the same machine. An alternative design is a separate root module per environment (one `main.tf` per environment that calls the shared modules), which allows all three to coexist simultaneously without reinitialisation.
 
-**Shared DynamoDB lock table:** All three environments use one lock table with separate lock keys. An alternative is one table per environment, but a single table is simpler to manage and the lock keys are namespaced by S3 key so there is no risk of cross-environment lock conflicts.
+**S3 native state locking:** State locking uses S3's built-in locking (`use_lockfile = true`) rather than a DynamoDB table. This removes a bootstrapping dependency — the S3 bucket alone is sufficient, and no second resource needs to exist before state can be used.
 
-**Node sizing by environment:** dev uses t3.small (1 node) to minimise cost. qa uses t3.medium (2 nodes) for basic multi-node testing. prod uses t3.large (3 nodes minimum) for workload headroom and rolling update capacity.
+**EKS API authentication mode:** The EKS cluster uses `authentication_mode = "API"` and access entries instead of the legacy `aws-auth` ConfigMap. This grants the Terraform caller cluster-admin rights automatically after apply without a separate `kubectl apply` step.
 
-**Environment configs use locals, not tfvars:** Each `environments/<env>/main.tf` hardcodes its environment name and sizing as locals. This prevents any possibility of accidentally passing a dev tfvars file to a prod apply.
+**Public subnets:** Subnets use public addressing. This gives nodes direct outbound internet access to pull container images and reach the EKS API endpoint. In a production system you would use private subnets behind a NAT Gateway to avoid exposing node IPs — public subnets are acceptable for this training exercise.
 
-**terraform destroy does not remove the state bucket:** The S3 bucket and DynamoDB table are created by `bootstrap/`, not by any environment config. Destroying an environment removes only its VPC and EKS resources — the state infrastructure persists. This is intentional: destroying the bucket would destroy the state for all other environments.
+**Node sizing by environment:** dev uses t3.small (1 node) to minimise cost. qa uses t3.medium (2 nodes) for basic multi-node testing. prd uses t3.large (3 nodes minimum) for workload headroom and rolling update capacity.
 
 ---
 
 ## Known Limitations
 
-- The `bootstrap/terraform.tfstate` file is stored locally. If it is lost, the S3 bucket and DynamoDB table would need to be manually imported back into a new bootstrap state with `terraform import`.
-- The EKS version is pinned to `1.32` in all environments. Check currently supported versions before applying: `aws eks describe-addon-versions --region af-south-1`.
-- No NAT Gateway — worker nodes have public IPs. Acceptable for training; not recommended for production workloads.
+- **No worker node group provisioned.** The EKS module defines `node_instance_type`, `node_desired_size`, `node_min_size`, and `node_max_size` variables, but the `aws_eks_node_group` resource and its associated IAM role are not implemented. The cluster control plane deploys, but no worker nodes join it.
+
+- **VPC networking is incomplete.** The VPC module creates a VPC and three subnets but does not provision an Internet Gateway or route tables. Worker nodes in public subnets require a route (`0.0.0.0/0 -> IGW`) to reach the internet. Without it, nodes cannot pull container images or communicate with the EKS API endpoint.
+
+- **Subnet tagging is missing.** EKS requires subnets to be tagged with `kubernetes.io/cluster/<name>=shared` for subnet auto-discovery by the control plane and load balancer controller. These tags are not applied in the current VPC module. The `cluster_name` variable is accepted by the VPC module but not used.
+
+- **CI workflow environment name mismatch.** The GitHub Actions matrix uses `prod` but the directory is `prd`. The `prod` matrix job will error with a missing directory.
+
+- **`bootstrap/terraform.tfstate` is stored locally.** If it is lost, the S3 bucket would need to be manually imported into a new bootstrap state with `terraform import`.
+
+- **EKS version is pinned to `1.32`** via the module default. Check currently supported versions before applying: `aws eks describe-addon-versions --region af-south-1`.
+
+- **No NAT Gateway.** Acceptable for training; not recommended for production workloads.
 
 ---
 
@@ -117,14 +172,15 @@ State locking uses S3 native locking (`use_lockfile = true`). Terraform writes a
 To destroy a single environment:
 
 ```bash
-cd environments/dev
-terraform destroy
+# Run from borsboomh-terraform/
+terraform init -reconfigure -backend-config=environments/dev/backend.tfvars
+terraform destroy -var-file=environments/dev/vars.tfvars
 ```
 
-The state bucket and DynamoDB table are not destroyed. To remove the bootstrap infrastructure after all environments are destroyed:
+The state bucket is not destroyed by environment teardown. To remove the bootstrap infrastructure after all environments are destroyed:
 
 ```bash
-# Empty the S3 bucket first (Terraform cannot delete a non-empty versioned bucket)
+# Empty the bucket first — Terraform cannot delete a non-empty versioned bucket
 aws s3 rm s3://borsboomh-tfstate --recursive
 cd bootstrap
 terraform destroy
