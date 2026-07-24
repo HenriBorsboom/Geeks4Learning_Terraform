@@ -1,0 +1,23 @@
+# Local state files — never commit these; bootstrap state is kept locally on purpose
+terraform.tfstate
+terraform.tfstate.backup
+*.tfstate
+*.tfstate.*
+
+# Terraform working directories and provider downloads
+.terraform/
+
+# Lock files are excluded here so each environment regenerates its own on init.
+# For team projects, remove this line and commit lock files for reproducible provider versions.
+.terraform.lock.hcl
+
+# Variable files that might contain sensitive values
+*.auto.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# OS noise
+.DS_Store
+Thumbs.db
